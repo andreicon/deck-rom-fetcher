@@ -78,8 +78,40 @@ class MainWindow(QMainWindow):
             self._pad.right.connect(self._on_pad_right)
             self._pad.confirm.connect(self._on_pad_confirm)
             self._pad.back.connect(self._go_back)
-            self._pad.log_line.connect(print)
+            self._pad.log_line.connect(self._on_pad_log)
             self._pad.start()
+        app = QApplication.instance()
+        if app is not None:
+            try:
+                app.aboutToQuit.connect(self._cleanup_threads)
+            except (RuntimeError, TypeError):
+                pass
+
+    def _on_pad_log(self, message: str) -> None:
+        print(message, flush=True)
+        self._pad_status = message
+        if hasattr(self, "_pad_label"):
+            self._pad_label.setText(message)
+
+    def _cleanup_threads(self) -> None:
+        worker, self._worker = self._worker, None
+        try:
+            if worker is not None and worker.isRunning():
+                worker.cancel()
+                worker.wait(5000)
+        except RuntimeError:
+            pass
+        pad, self._pad = self._pad, None
+        try:
+            if pad is not None and pad.isRunning():
+                pad.stop()
+                pad.wait(5000)
+        except RuntimeError:
+            pass
+
+    def closeEvent(self, event) -> None:  # never trap the user in the app
+        self._cleanup_threads()
+        super().closeEvent(event)
 
     # -- layout ---------------------------------------------------------
     def _build_ui(self) -> None:
@@ -116,6 +148,9 @@ class MainWindow(QMainWindow):
         self.systems_list.itemClicked.connect(self._on_system_chosen)
         layout.addWidget(self.systems_list, 1)
         layout.addWidget(self._hint_label(OWNERSHIP_LINE))
+        self._pad_label = QLabel("Gamepad: starting…")
+        self._pad_label.setObjectName("hint")
+        layout.addWidget(self._pad_label)
         open_btn = QPushButton("Open →")
         open_btn.setMinimumHeight(90)
         open_btn.clicked.connect(self._on_system_open_current)

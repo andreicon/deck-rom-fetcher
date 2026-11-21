@@ -128,17 +128,24 @@ class GamepadThread(QThread):
         held: dict[str, float] = {}
         next_repeat: dict[str, float] = {}
         dev = None
+        missing_logged = False
         while not self._stop:
             if dev is None:
                 paths = find_gamepads()
                 if not paths:
-                    self.msleep(2000)
+                    if not missing_logged:
+                        self.log_line.emit(
+                            "Gamepad: none readable yet — touch still works, "
+                            "retrying…")
+                        missing_logged = True
+                    self.msleep(500)
                     continue
+                missing_logged = False
                 try:
                     dev = evdev.InputDevice(paths[0])
                     self.log_line.emit(f"Gamepad: {dev.name}")
                 except OSError:
-                    self.msleep(2000)
+                    self.msleep(500)
                     continue
             try:
                 readable, _, _ = select.select([dev.fd], [], [], 0.2)

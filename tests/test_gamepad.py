@@ -1,4 +1,4 @@
-"""Gamepad mapping tests (pure functions + fake devices, no hardware)."""
+"""Gamepad mapping and thread lifecycle (no hardware needed)."""
 
 import os
 
@@ -68,11 +68,10 @@ def test_find_gamepads_prefers_named_pads(monkeypatch):
             return self._caps
 
     devs = {
-        "/dev/input/event0": FakeDev("AT keyboard", (ecodes.KEY_A,),
-                                     ()),
+        "/dev/input/event0": FakeDev("AT keyboard", (ecodes.KEY_A,), ()),
         "/dev/input/event1": FakeDev("Microsoft X-Box 360 pad",
-                                     (ecodes.BTN_A, ecodes.BTN_B),
-                                     (ecodes.ABS_HAT0X, ecodes.ABS_HAT0Y)),
+                                      (ecodes.BTN_A, ecodes.BTN_B),
+                                      (ecodes.ABS_HAT0X, ecodes.ABS_HAT0Y)),
     }
     monkeypatch.setattr(gamepad.evdev, "list_devices",
                         lambda: list(devs))
@@ -86,12 +85,23 @@ def test_find_gamepads_empty_without_evdev(monkeypatch):
     assert find_gamepads() == []
 
 
-def test_thread_emits_actions():
+def test_thread_signals_dispatch():
     _app = QApplication.instance() or QApplication([])
     received = []
-    thread = gamepad.GamepadThread()
-    thread.up.connect(lambda: received.append("up"))
-    thread.back.connect(lambda: received.append("back"))
-    thread._emit("up")
-    thread._emit("back")
+    t = gamepad.GamepadThread()
+    t.up.connect(lambda: received.append("up"))
+    t.back.connect(lambda: received.append("back"))
+    t._emit("up")
+    t._emit("back")
     assert received == ["up", "back"]
+    t.deleteLater()
+
+
+def test_thread_stops_while_waiting_for_device(monkeypatch):
+    _app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(gamepad, "find_gamepads", lambda: [])
+    t = gamepad.GamepadThread()
+    t.start()
+    t.stop()
+    assert t.wait(5000)
+    assert not t.isRunning()

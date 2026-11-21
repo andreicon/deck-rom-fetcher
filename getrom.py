@@ -12,6 +12,11 @@ from romfetcher.gui import MainWindow
 
 
 def main() -> int:
+    from PySide6 import QtCore
+
+    print(f"GetROM starting (Qt {QtCore.qVersion()}, "
+          f"platform {os.environ.get('QT_QPA_PLATFORM', 'default')})",
+          flush=True)
     app = QApplication.instance() or QApplication(sys.argv)
     window = MainWindow()
     window.start_pad()
