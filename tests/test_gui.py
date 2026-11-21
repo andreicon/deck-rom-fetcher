@@ -62,15 +62,13 @@ def test_system_choice_moves_to_search():
     assert "PS2" in window.search_title.text()
 
 
-def test_search_populates_results(monkeypatch):
+def test_search_populates_results_from_local_catalog():
     _app, window = _window()
     window._on_system_chosen(window.systems_list.item(0))
-    monkeypatch.setattr(
-        gui.archive, "search_titles",
-        lambda q, s: [{"identifier": "abc", "title": "Some Game (USA)"}])
-    window.search_box.setText("some game")
+    assert len(window._catalog) > 1000
+    window.search_box.setText("god of war")
     window._on_search()
-    assert window.results_list.count() == 1
+    assert 1 <= window.results_list.count() <= 50
 
 
 def test_result_rows_each_have_install_button(monkeypatch):
@@ -79,15 +77,11 @@ def test_result_rows_each_have_install_button(monkeypatch):
     # Patch BEFORE the search: row buttons bind this handler at creation.
     monkeypatch.setattr(
         gui.MainWindow, "_on_install_hit",
-        lambda self, hit: called.append(hit["identifier"]))
+        lambda self, hit: called.append(hit["name"]))
     window._on_system_chosen(window.systems_list.item(0))
-    monkeypatch.setattr(
-        gui.archive, "search_titles",
-        lambda q, s: [{"identifier": "a", "title": "Game One"},
-                      {"identifier": "b", "title": "Game Two"}])
-    window.search_box.setText("game")
+    window.search_box.setText("tekken tag")
     window._on_search()
-    assert window.results_list.count() == 2
+    assert window.results_list.count() >= 1
     installs = []
     for row in range(window.results_list.count()):
         widget = window.results_list.itemWidget(
@@ -97,13 +91,16 @@ def test_result_rows_each_have_install_button(monkeypatch):
         assert len(btns) == 1
         installs.append(btns[0])
     installs[0].click()
-    assert called == ["a"]
+    assert len(called) == 1 and called[0]
 
 
 def test_install_hit_single_file_autostarts(monkeypatch):
     _app, window = _window()
     window.show()
     window._on_system_chosen(window.systems_list.item(0))
+    monkeypatch.setattr(
+        gui.archive, "search_titles",
+        lambda q, s: [{"identifier": "abc", "title": "Some Game (USA)"}])
     monkeypatch.setattr(
         gui.archive, "list_files",
         lambda ident: [{"name": "game.chd", "size": "10"}])
@@ -122,7 +119,9 @@ def test_install_hit_single_file_autostarts(monkeypatch):
         failed = type("S", (), {"connect": staticmethod(lambda *a: None)})()
 
     monkeypatch.setattr(gui, "DownloadWorker", FakeWorker)
-    window._on_install_hit({"identifier": "abc", "title": "Some Game"})
+    window._on_install_hit({"name": "Some Game (USA)", "title": "Some Game",
+                            "discs": [{"name": "game.chd", "size": 10,
+                                       "sha1": ""}]})
     assert started.get("yes") is True
     assert window.stack.currentIndex() == 2
     assert window.progress.isVisible()
@@ -132,6 +131,9 @@ def test_install_hit_many_files_shows_combo_no_autostart(monkeypatch):
     _app, window = _window()
     window.show()
     window._on_system_chosen(window.systems_list.item(0))
+    monkeypatch.setattr(
+        gui.archive, "search_titles",
+        lambda q, s: [{"identifier": "abc", "title": "Some Game (USA)"}])
     monkeypatch.setattr(
         gui.archive, "list_files",
         lambda ident: [{"name": "game.iso", "size": "10"},
@@ -148,7 +150,8 @@ def test_install_hit_many_files_shows_combo_no_autostart(monkeypatch):
         failed = type("S", (), {"connect": staticmethod(lambda *a: None)})()
 
     monkeypatch.setattr(gui, "DownloadWorker", FakeWorker)
-    window._on_install_hit({"identifier": "abc", "title": "Some Game"})
+    window._on_install_hit({"name": "Some Game (USA)", "title": "Some Game",
+                            "discs": []})
     assert window.file_combo.isVisible()
     assert window.file_combo.count() == 2
     assert window.get_btn.isEnabled()

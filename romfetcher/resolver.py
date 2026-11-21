@@ -28,6 +28,80 @@ def _is_playable(name: str, playable: tuple) -> bool:
     return name.lower().endswith(playable)
 
 
+def _size_of(entry: dict) -> int | None:
+    try:
+        return int(entry.get("size"))
+    except (TypeError, ValueError):
+        return None
+
+
+def resolve_from_redump(release: dict, redump_id: str,
+                        search_fn: Callable, list_fn: Callable,
+                        allowlist: dict | None) -> dict:
+    """Redump-first resolution: exact release metadata -> Archive.org.
+
+    Uses the catalog entry's exact title for the archive query (quoted
+    first, unquoted exact-match fallback) and its byte sizes to auto-pick
+    the right file when several playables exist.
+    """
+    allowlist = allowlist or {}
+
+    def blank(**kw):
+        base = {"status": "", "identifier": None, "filename": None,
+                "candidates": [], "files": [], "sha1": None}
+        base.update(kw)
+        return base
+
+    title = (release.get("name") or "").strip()
+    sizes = {d.get("size") for d in release.get("discs", []) if d.get("size")}
+    if not title:
+        return blank(status="empty")
+
+    hits = search_fn(f'"{title}"', redump_id) or []
+    if not hits:
+        for hit in search_fn(title, redump_id) or []:
+            if ((hit.get("title") or "").strip().casefold()
+                    == title.casefold()):
+                hits.append(hit)
+    if not hits:
+        return blank(status="empty")
+    if len(hits) > 1:
+        exact = [h for h in hits
+                 if (h.get("title") or "").strip().casefold()
+                 == title.casefold()]
+        if len(exact) != 1:
+            return blank(status="ambiguous", candidates=hits)
+        hits = exact
+
+    identifier = hits[0].get("identifier")
+    files = list_fn(identifier) or []
+    playable = [f for f in files
+                if _is_playable(f.get("name", ""), _playable_extensions())]
+    if not playable:
+        return blank(status="empty", identifier=identifier, files=files)
+
+    disc_by_name = {d.get("name"): d for d in release.get("discs", [])
+                    if d.get("name")}
+
+    def sha1_for(filename: str | None) -> str | None:
+        if filename and filename in disc_by_name:
+            return disc_by_name[filename].get("sha1") or None
+        return None
+
+    if sizes:
+        sized = [f for f in playable if _size_of(f) in sizes]
+        if len(sized) == 1:
+            name = sized[0].get("name")
+            return blank(status="ok", identifier=identifier, filename=name,
+                         files=files, sha1=sha1_for(name))
+    if len(playable) == 1:
+        name = playable[0].get("name")
+        return blank(status="ok", identifier=identifier, filename=name,
+                     files=files, sha1=sha1_for(name))
+    return blank(status="need_file_choice", identifier=identifier,
+                 files=files)
+
+
 def resolve_identifier(identifier: str, list_fn: Callable,
                      allowlist: dict | None) -> dict:
     """Resolve a known Archive.org identifier straight to a file.

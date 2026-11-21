@@ -34,12 +34,24 @@ Keep-running) so the window stays usable. Every run is appended to
 
 ## How it works
 
-- Catalog: Redump-derived lists (`data/redump/`) for browsing-grade names.
-- Files: Archive.org `advancedsearch` + `metadata` APIs, single
-  connection with resume, polite one-file-at-a-time behavior.
+- Redump first: the search box searches a local Redump catalog
+  (`data/redump/ps2.json`, 11,774 PS2 releases with region, version,
+  file sizes, and hashes) — instant, no network, exact release names.
+- Files second: Install uses the entry's exact title against Archive.org
+  `advancedsearch` + `metadata` APIs, and matches byte sizes from the
+  datfile to auto-pick the right file when several playables exist.
+- Single connection with resume, polite one-file-at-a-time behavior.
 - Known-good entries live in `config/allowlist.<system>.json`; anything
   else goes through a disambiguation step — it never silently grabs the
   wrong region.
+
+To refresh the catalog when Redump publishes a newer datfile:
+
+```bash
+python3 tools/build_catalog.py <downloaded.dat> data/redump/ps2.json
+```
+
+Datfiles are public at http://redump.org/datfile/<system>/ (e.g. ps2).
 - Destination is detected from EmuDeck's `settings.sh` (`romsPath`),
   falling back to `~/Emulation/roms` and removable-media globs. No device
   names are hardcoded. PS2 maps to `roms/ps2` (see `config/systems.yaml`).

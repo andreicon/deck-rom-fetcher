@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from romfetcher import archive, resolver, systems
+from romfetcher import archive, redump, resolver, systems
 from romfetcher.worker import DownloadWorker
 
 OWNERSHIP_LINE = ("Only fetch games you own — one file per tap, "
@@ -222,9 +222,25 @@ class MainWindow(QMainWindow):
         self._emudeck_dir = mapping.get("emudeck_dir",
                                         redump_id.lower())
         self._allowlist = _load_allowlist(redump_id)
-        self.search_title.setText(f"{redump_id} — search Archive.org")
+        self._catalog = self._load_catalog(redump_id)
+        count = len(self._catalog)
+        self.search_title.setText(
+            f"{redump_id} — {count} releases (Redump catalog, on-device)")
         self.stack.setCurrentIndex(1)
         self.search_box.setFocus()
+
+    @staticmethod
+    def _load_catalog(redump_id: str) -> list:
+        here = os.path.dirname(os.path.abspath(__file__))
+        path = os.path.join(os.path.dirname(here), "data", "redump",
+                            f"{redump_id.lower()}.json")
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            releases = data.get("releases", [])
+            return releases if isinstance(releases, list) else []
+        except (OSError, ValueError):
+            return []
 
     # -- search ------------------------------------------------------------
     def _on_search(self) -> None:
@@ -232,27 +248,22 @@ class MainWindow(QMainWindow):
         if not query:
             return
         self.results_list.clear()
-        self.status.setText("Searching…")
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            self._hits = archive.search_titles(
-                query, getattr(self, "_redump_id", "PS2"))
-        except Exception as exc:
-            QMessageBox.warning(self, "Search failed",
-                                f"{exc} — check your network and try again.")
-            return
-        finally:
-            QApplication.restoreOverrideCursor()
+        # Redump first: instant local search, no network involved.
+        self._hits = redump.search_catalog(
+            query, getattr(self, "_catalog", []))
         if not self._hits:
-            QListWidgetItem(f'No results for "{query}".', self.results_list)
+            QListWidgetItem(f'No releases matching "{query}".', self.results_list)
             return
         for hit in self._hits:
             item = QListWidgetItem(self.results_list)
             row = QWidget()
             layout = QHBoxLayout(row)
             layout.setContentsMargins(12, 8, 12, 8)
-            label = QLabel(
-                f"{hit.get('title', '')}\n{hit.get('identifier', '')}")
+            meta = " • ".join(p for p in (hit.get("region", ""),
+                                          ("v" + hit["version"]
+                                           if hit.get("version") else ""))
+                              if p)
+            label = QLabel(f"{hit.get('name', '')}\n{meta}")
             label.setWordWrap(True)
             install = QPushButton("Install")
             install.setMinimumHeight(90)
@@ -273,26 +284,33 @@ class MainWindow(QMainWindow):
         self._resolve_title(hit.get("title", ""))
 
     def _on_install_hit(self, hit: dict) -> None:
-        """Install button on a search row: download this item right away."""
-        identifier = hit.get("identifier", "")
-        title = hit.get("title", "")
+        """Install button on a search row: Redump metadata -> Archive.org."""
         try:
-            result = resolver.resolve_identifier(
-                identifier, archive.list_files, self._allowlist)
+            result = resolver.resolve_from_redump(
+                hit, getattr(self, "_redump_id", "PS2"),
+                archive.search_titles, archive.list_files, self._allowlist)
         except Exception as exc:
             QMessageBox.warning(self, "Could not resolve",
                                 f"{exc} — check your network and try again.")
             return
         if result.get("status") == "empty":
-            names = ", ".join(
-                f.get("name", "?") for f in result.get("files", [])[:5])
             QMessageBox.information(
-                self, "Nothing playable",
-                f'"{title}" has no playable file. Files: {names}')
+                self, "Not on Archive.org",
+                f'No Archive.org item found for\n"{hit.get("name", "")}".\n'
+                "Try a different region or version.")
             return
-        self._show_detail(title, identifier, result.get("files", []),
-                          result.get("status", ""),
-                          result.get("sha1"),
+        if result.get("status") == "ambiguous":
+            lines = "\n".join(
+                f"• {c.get('title', '')}" for c in result.get("candidates", [])
+                [:8])
+            QMessageBox.information(
+                self, "Too many matches",
+                "Archive.org has several items for this release:\n"
+                f"{lines}\nRefine the search with region or version.")
+            return
+        self._show_detail(hit.get("name", ""), result.get("identifier"),
+                          result.get("files", []) or [],
+                          result.get("status", ""), result.get("sha1"),
                           autostart=(result.get("status") == "ok"))
 
     def _show_detail(self, title: str, identifier: str | None,
