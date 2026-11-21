@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from romfetcher import archive, redump, resolver, systems
+from romfetcher.gamepad import GamepadThread
 from romfetcher.worker import DownloadWorker
 
 OWNERSHIP_LINE = ("Only fetch games you own — one file per tap, "
@@ -61,9 +62,24 @@ class MainWindow(QMainWindow):
         self._identifier: str | None = None
         self._title = ""
         self._sha1_override: str | None = None
+        self._row_mode = "catalog"
+        self._pad = None
         self._worker: DownloadWorker | None = None
         self._build_ui()
         self._load_systems()
+
+    def start_pad(self) -> None:
+        """Start gamepad driving (production entry calls this, not tests)."""
+        if self._pad is None:
+            self._pad = GamepadThread(self)
+            self._pad.up.connect(self._on_pad_up)
+            self._pad.down.connect(self._on_pad_down)
+            self._pad.left.connect(self._on_pad_left)
+            self._pad.right.connect(self._on_pad_right)
+            self._pad.confirm.connect(self._on_pad_confirm)
+            self._pad.back.connect(self._go_back)
+            self._pad.log_line.connect(print)
+            self._pad.start()
 
     # -- layout ---------------------------------------------------------
     def _build_ui(self) -> None:
@@ -176,12 +192,71 @@ class MainWindow(QMainWindow):
     # -- navigation ------------------------------------------------------
     def keyPressEvent(self, event) -> None:  # B button / Esc goes back
         if event.key() == Qt.Key_Escape:
-            if self.stack.currentIndex() == 2:
-                self._go_search()
-            elif self.stack.currentIndex() == 1:
-                self._go_systems()
+            self._go_back()
             return
         super().keyPressEvent(event)
+
+    def _go_back(self) -> None:
+        if self.stack.currentIndex() == 2:
+            self._go_search()
+        elif self.stack.currentIndex() == 1:
+            self._go_systems()
+
+    def _current_list(self) -> QListWidget | None:
+        if self.stack.currentIndex() == 0:
+            return self.systems_list
+        if self.stack.currentIndex() == 1:
+            return self.results_list
+        return None
+
+    def _move_selection(self, delta: int) -> None:
+        if (self.stack.currentIndex() == 2
+                and self.file_combo.isVisible()):
+            idx = self.file_combo.currentIndex()
+            self.file_combo.setCurrentIndex(
+                max(0, min(self.file_combo.count() - 1, idx + delta)))
+            return
+        lst = self._current_list()
+        if lst is None or lst.count() == 0:
+            return
+        row = lst.currentRow()
+        if row < 0:
+            row = 0 if delta > 0 else lst.count() - 1
+        else:
+            row = (row + delta) % lst.count()
+        lst.setCurrentRow(row)
+        lst.scrollToItem(lst.item(row))
+
+    def _on_pad_up(self) -> None:
+        self._move_selection(-1)
+
+    def _on_pad_down(self) -> None:
+        self._move_selection(1)
+
+    def _on_pad_left(self) -> None:
+        self._move_selection(-5)
+
+    def _on_pad_right(self) -> None:
+        self._move_selection(5)
+
+    def _on_pad_confirm(self) -> None:
+        focused = QApplication.focusWidget()
+        if isinstance(focused, QPushButton):
+            focused.click()
+            return
+        if isinstance(focused, QLineEdit):
+            self._on_search()
+            return
+        lst = self._current_list()
+        if lst is not None:
+            item = lst.currentItem()
+            if item is not None:
+                if lst is self.systems_list:
+                    self._on_system_chosen(item)
+                else:
+                    self._on_result_chosen(item)
+        elif self.stack.currentIndex() == 2:
+            self.get_btn.click()
 
     def _go_systems(self) -> None:
         self._stop_worker()
@@ -243,45 +318,113 @@ class MainWindow(QMainWindow):
             return []
 
     # -- search ------------------------------------------------------------
-    def _on_search(self) -> None:
-        query = self.search_box.text().strip()
-        if not query:
-            return
-        self.results_list.clear()
-        # Redump first: instant local search, no network involved.
-        self._hits = redump.search_catalog(
-            query, getattr(self, "_catalog", []))
-        if not self._hits:
-            QListWidgetItem(f'No releases matching "{query}".', self.results_list)
-            return
-        for hit in self._hits:
-            item = QListWidgetItem(self.results_list)
-            row = QWidget()
-            layout = QHBoxLayout(row)
-            layout.setContentsMargins(12, 8, 12, 8)
+    def _row_label(self, hit: dict) -> str:
+        if "discs" in hit:  # Redump catalog entry
             meta = " • ".join(p for p in (hit.get("region", ""),
                                           ("v" + hit["version"]
                                            if hit.get("version") else ""))
                               if p)
-            label = QLabel(f"{hit.get('name', '')}\n{meta}")
+            return f"{hit.get('name', '')}\n{meta}"
+        return f"{hit.get('title', '')}\n{hit.get('identifier', '')}"
+
+    def _fill_results(self, hits: list, mode: str) -> None:
+        self._row_mode = mode
+        self._hits = hits
+        self.results_list.clear()
+        for hit in hits:
+            item = QListWidgetItem(self.results_list)
+            row = QWidget()
+            layout = QHBoxLayout(row)
+            layout.setContentsMargins(12, 8, 12, 8)
+            label = QLabel(self._row_label(hit))
             label.setWordWrap(True)
             install = QPushButton("Install")
             install.setMinimumHeight(90)
             install.setMinimumWidth(220)
-            install.clicked.connect(partial(self._on_install_hit, hit))
+            install.clicked.connect(partial(self._on_row_install, hit))
             layout.addWidget(label, 1)
             layout.addWidget(install)
             item.setSizeHint(row.sizeHint())
             self.results_list.setItemWidget(item, row)
-        self.results_list.setCurrentRow(0)
+        if hits:
+            self.results_list.setCurrentRow(0)
         self.results_list.setFocus()
+
+    def _show_archive_candidates(self, candidates: list) -> None:
+        """Several Archive.org items matched: let the user pick one."""
+        self.search_title.setText("Archive.org matches — pick one")
+        self._fill_results(candidates, mode="archive")
+
+    def _on_search(self) -> None:
+        query = self.search_box.text().strip()
+        if not query:
+            return
+        # Redump first: instant local search, no network involved.
+        hits = redump.search_catalog(query, getattr(self, "_catalog", []))
+        if not hits:
+            self._row_mode = "catalog"
+            self._hits = []
+            self.results_list.clear()
+            QListWidgetItem(f'No releases matching "{query}".', self.results_list)
+            return
+        self._fill_results(hits, mode="catalog")
 
     def _on_result_chosen(self, item: QListWidgetItem) -> None:
         row = self.results_list.row(item)
         if row >= len(self._hits):
             return  # the "no results" placeholder row
         hit = self._hits[row]
-        self._resolve_title(hit.get("title", ""))
+        if self._row_mode == "archive":
+            self._open_identifier_detail(hit)
+        else:
+            self._resolve_title(hit.get("title", ""))
+
+    def _on_row_install(self, hit: dict) -> None:
+        if "discs" in hit:
+            self._on_install_hit(hit)
+        else:
+            self._on_install_identifier(hit, autostart=True)
+
+    def _open_identifier_detail(self, hit: dict) -> None:
+        """Tap on an Archive.org candidate row: show it, don't download."""
+        try:
+            result = resolver.resolve_identifier(
+                hit.get("identifier", ""), archive.list_files,
+                self._allowlist)
+        except Exception as exc:
+            QMessageBox.warning(self, "Could not resolve",
+                                f"{exc} — check your network and try again.")
+            return
+        if result.get("status") == "empty":
+            QMessageBox.information(
+                self, "Nothing playable",
+                f'"{hit.get("title", "")}" has no playable file.')
+            return
+        self._show_detail(hit.get("title", ""), result.get("identifier"),
+                          result.get("files", []) or [],
+                          result.get("status", ""), result.get("sha1"),
+                          autostart=False)
+
+    def _on_install_identifier(self, hit: dict, autostart: bool = True) -> None:
+        """Install button on an Archive.org candidate row."""
+        try:
+            result = resolver.resolve_identifier(
+                hit.get("identifier", ""), archive.list_files,
+                self._allowlist)
+        except Exception as exc:
+            QMessageBox.warning(self, "Could not resolve",
+                                f"{exc} — check your network and try again.")
+            return
+        if result.get("status") == "empty":
+            QMessageBox.information(
+                self, "Nothing playable",
+                f'"{hit.get("title", "")}" has no playable file.')
+            return
+        self._show_detail(hit.get("title", ""), result.get("identifier"),
+                          result.get("files", []) or [],
+                          result.get("status", ""), result.get("sha1"),
+                          autostart=(autostart
+                                     and result.get("status") == "ok"))
 
     def _on_install_hit(self, hit: dict) -> None:
         """Install button on a search row: Redump metadata -> Archive.org."""
@@ -300,13 +443,7 @@ class MainWindow(QMainWindow):
                 "Try a different region or version.")
             return
         if result.get("status") == "ambiguous":
-            lines = "\n".join(
-                f"• {c.get('title', '')}" for c in result.get("candidates", [])
-                [:8])
-            QMessageBox.information(
-                self, "Too many matches",
-                "Archive.org has several items for this release:\n"
-                f"{lines}\nRefine the search with region or version.")
+            self._show_archive_candidates(result.get("candidates", []))
             return
         self._show_detail(hit.get("name", ""), result.get("identifier"),
                           result.get("files", []) or [],

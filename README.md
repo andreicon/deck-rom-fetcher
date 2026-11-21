@@ -14,7 +14,7 @@ no BIOS files (ES-DE handles those).
 Requires Python 3.10+ with `PySide6`, `httpx`, `pyyaml` (one time):
 
 ```bash
-python3 -m pip install --user PySide6 httpx pyyaml
+python3 -m pip install --user PySide6 httpx pyyaml evdev pytest
 ```
 
 Copy this whole folder to the SD card (or internal storage):
@@ -60,6 +60,11 @@ Datfiles are public at http://redump.org/datfile/<system>/ (e.g. ps2).
 
 - D-pad / left stick / arrows: move. A / Enter: select. B / Esc: back.
 - Touchscreen: tap anything. Search box: focus it, press Steam+X to type.
+- Every screen has Back and Exit buttons; lists respond to a single tap.
+
+The gamepad is read directly from the Deck's controls on-device, so no
+Steam Input remapping is needed. If no gamepad is readable, everything
+still works by touch.
 
 ## Develop / test
 
