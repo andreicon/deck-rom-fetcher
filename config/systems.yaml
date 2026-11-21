@@ -1,0 +1,4 @@
+PS2:
+  emudeck_dir: ps2
+  extensions: [.iso, .bin, .cue, .chd, .cso]
+  outer: [.zip, .7z]

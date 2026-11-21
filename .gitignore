@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+get-rom.log
+.cache/
+.pytest_cache/
