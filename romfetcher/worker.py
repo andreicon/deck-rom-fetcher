@@ -55,13 +55,16 @@ class DownloadWorker(QThread):
             cache = os.path.join(os.path.expanduser("~"), ".cache",
                                  "romfetcher")
             os.makedirs(cache, exist_ok=True)
-            dest = os.path.join(cache, os.path.basename(self.filename))
+            dest = download.cache_path(cache, self.identifier, self.filename)
             url = archive.download_url(self.identifier, self.filename)
             if self._cancel:
                 self.failed.emit("Cancelled.")
                 return
-            download.fetch(url, dest, expected_size=size,
-                           progress_cb=self._emit_progress)
+            try:
+                download.fetch(url, dest, expected_size=size,
+                               progress_cb=self._emit_progress)
+            except download.ExistsError:
+                self.log_line.emit("Already staged — installing it.")
             if self._cancel:
                 self.failed.emit("Cancelled.")
                 return
@@ -74,8 +77,8 @@ class DownloadWorker(QThread):
             self.finished.emit(final)
         except download.SpaceError as exc:
             self.failed.emit(f"Not enough free space: {exc}")
-        except download.ExistsError:
-            self.failed.emit("Already downloaded — check your ROMs folder.")
+        except download.IncompleteError as exc:
+            self.failed.emit(f"{exc}")
         except Exception as exc:  # network, archive, bug: show, don't crash
             self.failed.emit(f"Download failed: {exc} — check network, "
                              "then try again.")

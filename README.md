@@ -41,6 +41,9 @@ Keep-running) so the window stays usable. Every run is appended to
   `advancedsearch` + `metadata` APIs, and matches byte sizes from the
   datfile to auto-pick the right file when several playables exist.
 - Single connection with resume, polite one-file-at-a-time behavior.
+- Every download is verified: error pages are rejected, and the finished
+  size must match the advertised size — a short file errors out instead
+  of landing broken in your ROMs folder. Retrying resumes it.
 - Known-good entries live in `config/allowlist.<system>.json`; anything
   else goes through a disambiguation step — it never silently grabs the
   wrong region.

@@ -557,6 +557,7 @@ class MainWindow(QMainWindow):
             entry = self._allowlist.get(self._title)
             if isinstance(entry, dict):
                 sha1 = entry.get("sha1")
+        self._stop_worker()  # never run two downloads at once
         self.get_btn.setEnabled(False)
         self.progress.setVisible(True)
         self.progress.setRange(0, 0)  # busy until first progress signal

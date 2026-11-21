@@ -256,3 +256,48 @@ def test_tap_archive_row_opens_detail_without_download(monkeypatch):
     assert window.stack.currentIndex() == 2
     assert not window.progress.isVisible()
     assert window.get_btn.isEnabled()
+
+
+def test_get_stops_previous_download_first(monkeypatch):
+    _app, window = _window()
+    window.show()
+    window._on_system_chosen(window.systems_list.item(0))
+    window._files = [{"name": "game.chd", "size": "10"}]
+    window._identifier = "abc"
+    window._title = "Some Game"
+    window._allowlist = {}
+    window._sha1_override = None
+    window.stack.setCurrentIndex(2)
+
+    stopped = []
+
+    class OldWorker:
+        def isRunning(self):
+            return True
+
+        def cancel(self):
+            stopped.append(True)
+
+        def wait(self, timeout):
+            return True
+
+    window._worker = OldWorker()
+    started = {}
+
+    class FakeWorker:
+        def __init__(self, *a, **k):
+            pass
+
+        def start(self):
+            started["yes"] = True
+
+        progress = type("S", (), {"connect": staticmethod(lambda *a: None)})()
+        log_line = type("S", (), {"connect": staticmethod(lambda *a: None)})()
+        finished = type("S", (), {"connect": staticmethod(lambda *a: None)})()
+        failed = type("S", (), {"connect": staticmethod(lambda *a: None)})()
+
+    monkeypatch.setattr(gui, "DownloadWorker", FakeWorker)
+    window.file_combo.setVisible(False)
+    window._on_get()
+    assert stopped == [True]
+    assert started.get("yes") is True
