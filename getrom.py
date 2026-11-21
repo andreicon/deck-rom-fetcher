@@ -20,7 +20,7 @@ def main() -> int:
     app = QApplication.instance() or QApplication(sys.argv)
     window = MainWindow()
     window.start_pad()
-    window.showMaximized()
+    window.showFullScreen()
     return app.exec()
 
 

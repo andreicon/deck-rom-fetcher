@@ -4,7 +4,7 @@ import json
 import os
 from functools import partial
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -144,6 +144,8 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(page)
         layout.addWidget(QLabel("GetROM — pick a system"))
         self.systems_list = QListWidget()
+        self.systems_list.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarAlwaysOff)
         self.systems_list.itemActivated.connect(self._on_system_chosen)
         self.systems_list.itemClicked.connect(self._on_system_chosen)
         layout.addWidget(self.systems_list, 1)
@@ -174,6 +176,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._hint_label(
             "Steam+X opens the keyboard. D-pad moves, A selects, B goes back."))
         self.results_list = QListWidget()
+        self.results_list.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarAlwaysOff)
         self.results_list.itemActivated.connect(self._on_result_chosen)
         self.results_list.itemClicked.connect(self._on_result_chosen)
         layout.addWidget(self.results_list, 1)
@@ -379,7 +383,9 @@ class MainWindow(QMainWindow):
             install.clicked.connect(partial(self._on_row_install, hit))
             layout.addWidget(label, 1)
             layout.addWidget(install)
-            item.setSizeHint(row.sizeHint())
+            # Bounded width: long titles must wrap, never stretch the UI.
+            item.setSizeHint(
+                QSize(10, max(row.sizeHint().height(), 110)))
             self.results_list.setItemWidget(item, row)
         if hits:
             self.results_list.setCurrentRow(0)

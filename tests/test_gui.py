@@ -4,6 +4,7 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
     QApplication,
     QMessageBox,
@@ -301,3 +302,21 @@ def test_get_stops_previous_download_first(monkeypatch):
     window._on_get()
     assert stopped == [True]
     assert started.get("yes") is True
+
+
+def test_long_titles_dont_stretch_rows():
+    _app, window = _window()
+    window._on_system_chosen(window.systems_list.item(0))
+    long_name = "X" * 300 + " (Europe) (En,Fr,De,Es,It) (v2.00)"
+    window._catalog = [{"name": long_name, "title": "X", "region": "Europe",
+                        "version": "2.00", "discs": []}]
+    window.search_box.setText("xxx")
+    window._on_search()
+    assert window.results_list.count() == 1
+    item = window.results_list.item(0)
+    assert item.sizeHint().width() < 800
+    assert item.sizeHint().height() >= 90
+    assert (window.results_list.horizontalScrollBarPolicy()
+            == Qt.ScrollBarAlwaysOff)
+    assert (window.systems_list.horizontalScrollBarPolicy()
+            == Qt.ScrollBarAlwaysOff)
