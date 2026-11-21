@@ -26,26 +26,82 @@ REPEAT_DELAY = 0.45
 REPEAT_RATE = 0.09
 
 
+def _codes(caps: dict, ev_type: int) -> list:
+    """Capability codes, tolerating evdev's (code, AbsInfo) ABS tuples."""
+    out = []
+    for entry in caps.get(ev_type, ()):
+        out.append(entry[0] if isinstance(entry, tuple) else entry)
+    return out
+
+
 def find_gamepads() -> list:
-    """Device paths that look like gamepads, best first."""
+    """Device paths that look like gamepads, best first.
+
+    Devices are closed after inspection: this runs in a rescan loop and
+    leaking fds would eventually make every open fail.
+    """
     if evdev is None:
         return []
+    try:
+        paths = evdev.list_devices()
+    except OSError:
+        return []
     found, others = [], []
-    for path in evdev.list_devices():
+    for path in paths:
         try:
             dev = evdev.InputDevice(path)
+        except OSError:
+            continue
+        try:
             name = (dev.name or "").lower()
             caps = dev.capabilities()
         except OSError:
             continue
-        keys = caps.get(ecodes.EV_KEY, ())
+        finally:
+            try:
+                dev.close()
+            except OSError:
+                pass
+        keys = _codes(caps, ecodes.EV_KEY)
+        abs_axes = _codes(caps, ecodes.EV_ABS)
         has_pad = (ecodes.BTN_A in keys
-                   and (ecodes.ABS_HAT0X in caps.get(ecodes.EV_ABS, ())
+                   and (ecodes.ABS_HAT0X in abs_axes
                         or ecodes.BTN_DPAD_UP in keys))
         if has_pad:
             (found if any(h in name for h in NAME_HINTS) else others
              ).append(path)
     return found + others
+
+
+def describe_inputs() -> str:
+    """One-shot diagnostic of what this process can see (logged on start)."""
+    import os as _os
+    who = "euid=%d" % _os.geteuid()
+    try:
+        listing = sorted(_os.listdir("/dev/input"))
+    except OSError as exc:
+        return "%s; input scan failed: %s" % (who, exc)
+    lines = ["%s input-dir=%s" % (who, listing)]
+    if evdev is None:
+        return "evdev missing; " + lines[0]
+    try:
+        paths = evdev.list_devices()
+    except OSError as exc:
+        return "list_devices failed: %s; %s" % (exc, lines[0])
+    lines.append("devices=%s" % (paths or "none"))
+    for path in paths:
+        try:
+            dev = evdev.InputDevice(path)
+            try:
+                lines.append("%s name=%r keys=%d abs=%d" % (
+                    path, dev.name,
+                    len(dev.capabilities().get(ecodes.EV_KEY, [])),
+                    len(dev.capabilities().get(ecodes.EV_ABS, []))))
+            finally:
+                dev.close()
+        except OSError as exc:
+            lines.append("%s open-failed: %s" % (path, exc))
+    return "; ".join(lines)
 
 
 def release_for_event(ev_type: int, code: int, value: int) -> list:
@@ -124,55 +180,67 @@ class GamepadThread(QThread):
             self.log_line.emit("No gamepad support (evdev missing) — "
                                "touch controls only.")
             return
-        self.log_line.emit("Gamepad: waiting for controller…")
+        self.log_line.emit("Gamepad: %s" % describe_inputs())
         held: dict[str, float] = {}
         next_repeat: dict[str, float] = {}
         dev = None
         missing_logged = False
-        while not self._stop:
-            if dev is None:
-                paths = find_gamepads()
-                if not paths:
-                    if not missing_logged:
-                        self.log_line.emit(
-                            "Gamepad: none readable yet — touch still works, "
-                            "retrying…")
-                        missing_logged = True
-                    self.msleep(500)
-                    continue
-                missing_logged = False
-                try:
-                    dev = evdev.InputDevice(paths[0])
-                    self.log_line.emit(f"Gamepad: {dev.name}")
-                except OSError:
-                    self.msleep(500)
-                    continue
-            try:
-                readable, _, _ = select.select([dev.fd], [], [], 0.2)
-            except (OSError, ValueError):
-                dev = None
-                continue
-            now = time.monotonic()
-            if not readable:
-                for action, t0 in list(held.items()):
-                    if now - t0 >= REPEAT_DELAY and now >= next_repeat.get(
-                            action, 0):
-                        self._emit(action)
-                        next_repeat[action] = now + REPEAT_RATE
-                continue
-            try:
-                for event in dev.read():
-                    for dropped in release_for_event(
-                            event.type, event.code, event.value):
-                        held.pop(dropped, None)
-                    action = action_for_event(event.type, event.code,
-                                              event.value)
-                    if action is None:
+        try:
+            while not self._stop:
+                if dev is None:
+                    paths = find_gamepads()
+                    if not paths:
+                        if not missing_logged:
+                            self.log_line.emit(
+                                "Gamepad: none readable yet — touch works, "
+                                "retrying…")
+                            missing_logged = True
+                        self.msleep(500)
                         continue
-                    if action in ("up", "down", "left", "right"):
-                        held[action] = now
-                        next_repeat[action] = now + REPEAT_DELAY
-                    self._emit(action)
-            except OSError:
-                dev = None
-                held.clear()
+                    missing_logged = False
+                    try:
+                        dev = evdev.InputDevice(paths[0])
+                        self.log_line.emit(f"Gamepad: {dev.name}")
+                    except OSError:
+                        self.msleep(500)
+                        continue
+                try:
+                    readable, _, _ = select.select([dev.fd], [], [], 0.2)
+                except (OSError, ValueError):
+                    dev = self._drop(dev)
+                    continue
+                now = time.monotonic()
+                if not readable:
+                    for action, t0 in list(held.items()):
+                        if now - t0 >= REPEAT_DELAY and now >= next_repeat.get(
+                                action, 0):
+                            self._emit(action)
+                            next_repeat[action] = now + REPEAT_RATE
+                    continue
+                try:
+                    for event in dev.read():
+                        for dropped in release_for_event(
+                                event.type, event.code, event.value):
+                            held.pop(dropped, None)
+                        action = action_for_event(event.type, event.code,
+                                                  event.value)
+                        if action is None:
+                            continue
+                        if action in ("up", "down", "left", "right"):
+                            held[action] = now
+                            next_repeat[action] = now + REPEAT_DELAY
+                        self._emit(action)
+                except OSError:
+                    dev = self._drop(dev)
+                    held.clear()
+        finally:
+            self._drop(dev)
+
+    @staticmethod
+    def _drop(dev):
+        try:
+            if dev is not None:
+                dev.close()
+        except OSError:
+            pass
+        return None

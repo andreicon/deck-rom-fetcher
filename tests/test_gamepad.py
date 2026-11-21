@@ -56,6 +56,8 @@ def test_find_gamepads_prefers_named_pads(monkeypatch):
     from evdev import ecodes
 
     class FakeDev:
+        closed = []
+
         def __init__(self, name, keys, abs_axes):
             self._name = name
             self._caps = {ecodes.EV_KEY: keys, ecodes.EV_ABS: abs_axes}
@@ -67,17 +69,23 @@ def test_find_gamepads_prefers_named_pads(monkeypatch):
         def capabilities(self):
             return self._caps
 
+        def close(self):
+            FakeDev.closed.append(self._name)
+
     devs = {
         "/dev/input/event0": FakeDev("AT keyboard", (ecodes.KEY_A,), ()),
         "/dev/input/event1": FakeDev("Microsoft X-Box 360 pad",
                                       (ecodes.BTN_A, ecodes.BTN_B),
-                                      (ecodes.ABS_HAT0X, ecodes.ABS_HAT0Y)),
+                                      ((ecodes.ABS_HAT0X, None),
+                                       (ecodes.ABS_HAT0Y, None))),
     }
     monkeypatch.setattr(gamepad.evdev, "list_devices",
                         lambda: list(devs))
     monkeypatch.setattr(gamepad.evdev, "InputDevice",
                         lambda path: devs[path])
     assert find_gamepads() == ["/dev/input/event1"]
+    assert sorted(FakeDev.closed) == ["AT keyboard",
+                                      "Microsoft X-Box 360 pad"]
 
 
 def test_find_gamepads_empty_without_evdev(monkeypatch):
@@ -105,3 +113,18 @@ def test_thread_stops_while_waiting_for_device(monkeypatch):
     t.stop()
     assert t.wait(5000)
     assert not t.isRunning()
+
+
+def test_describe_inputs_reports_what_it_sees():
+    report = gamepad.describe_inputs()
+    assert isinstance(report, str)
+    assert "euid=" in report
+
+
+def test_drop_closes_and_returns_none():
+    class Exploding:
+        def close(self):
+            raise OSError("boom")
+
+    assert gamepad.GamepadThread._drop(None) is None
+    assert gamepad.GamepadThread._drop(Exploding()) is None
