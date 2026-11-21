@@ -101,7 +101,7 @@ def test_install_hit_single_file_autostarts(monkeypatch):
     window._on_system_chosen(window.systems_list.item(0))
     monkeypatch.setattr(
         gui.archive, "search_titles",
-        lambda q, s: [{"identifier": "abc", "title": "Some Game (USA)"}])
+        lambda q, s, **k: [{"identifier": "abc", "title": "Some Game (USA)"}])
     monkeypatch.setattr(
         gui.archive, "list_files",
         lambda ident: [{"name": "game.chd", "size": "10"}])
@@ -134,7 +134,7 @@ def test_install_hit_many_files_shows_combo_no_autostart(monkeypatch):
     window._on_system_chosen(window.systems_list.item(0))
     monkeypatch.setattr(
         gui.archive, "search_titles",
-        lambda q, s: [{"identifier": "abc", "title": "Some Game (USA)"}])
+        lambda q, s, **k: [{"identifier": "abc", "title": "Some Game (USA)"}])
     monkeypatch.setattr(
         gui.archive, "list_files",
         lambda ident: [{"name": "game.iso", "size": "10"},
@@ -224,7 +224,7 @@ def test_ambiguous_replaces_results_with_candidates(monkeypatch):
     window._on_system_chosen(window.systems_list.item(0))
     monkeypatch.setattr(
         gui.archive, "search_titles",
-        lambda q, s: [{"identifier": "a", "title": "Other A"},
+        lambda q, s, **k: [{"identifier": "a", "title": "Other A"},
                       {"identifier": "b", "title": "Other B"}])
     called = []
     monkeypatch.setattr(

@@ -37,9 +37,15 @@ Keep-running) so the window stays usable. Every run is appended to
 - Redump first: the search box searches a local Redump catalog
   (`data/redump/ps2.json`, 11,774 PS2 releases with region, version,
   file sizes, and hashes) — instant, no network, exact release names.
-- Files second: Install uses the entry's exact title against Archive.org
-  `advancedsearch` + `metadata` APIs, and matches byte sizes from the
-  datfile to auto-pick the right file when several playables exist.
+- Files second: Install looks the exact release file up in the
+  Unofficial Redump Hoard collection (`collection:redump`) using the
+  entry's base title, then matches `<Release Name>.zip` byte-for-byte.
+  If the hoard has nothing usable, it falls back to a global
+  Archive.org exact-title search with the same size checking.
+- Every download is verified: error pages are rejected, login-walled
+  files are skipped in favor of open mirrors, and the finished size
+  must match the advertised size — a short file errors out instead of
+  landing broken in your ROMs folder. Retrying resumes.
 - Single connection with resume, polite one-file-at-a-time behavior.
 - Every download is verified: error pages are rejected, and the finished
   size must match the advertised size — a short file errors out instead

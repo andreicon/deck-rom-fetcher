@@ -35,20 +35,34 @@ def _size_of(entry: dict) -> int | None:
         return None
 
 
+HOARD_COLLECTION = "redump"
+
+
+def _is_mega_set(hit: dict) -> bool:
+    """Deprioritize giant multi-hundred-GB set parts (slow metadata)."""
+    text = f"{hit.get('identifier', '')} {hit.get('title', '')}".lower()
+    return ("redump" in text
+            and (" set" in text or " part " in text or "set_" in text
+                 or text.endswith("set")))
+
+
 def resolve_from_redump(release: dict, redump_id: str,
                         search_fn: Callable, list_fn: Callable,
                         allowlist: dict | None) -> dict:
-    """Redump-first resolution: exact release metadata -> Archive.org.
+    """Redump-first resolution: catalog metadata -> Archive.org.
 
-    Uses the catalog entry's exact title for the archive query (quoted
-    first, unquoted exact-match fallback) and its byte sizes to auto-pick
-    the right file when several playables exist.
+    Starts in the Unofficial Redump Hoard collection with a relaxed query
+    (base title), then nails the exact release by filename inside the
+    item: `<Redump name>.zip` for hoard packs, or the disc image name for
+    single-game items. Falls back to the legacy global exact-title
+    search when the hoard has nothing.
     """
     allowlist = allowlist or {}
 
     def blank(**kw):
         base = {"status": "", "identifier": None, "filename": None,
-                "candidates": [], "files": [], "sha1": None}
+                "candidates": [], "files": [], "sha1": None,
+                "alternates": []}
         base.update(kw)
         return base
 
@@ -57,6 +71,59 @@ def resolve_from_redump(release: dict, redump_id: str,
     if not title:
         return blank(status="empty")
 
+    disc_by_name = {d.get("name"): d for d in release.get("discs", [])
+                    if d.get("name")}
+
+    def sha1_for(filename: str | None) -> str | None:
+        if filename and filename in disc_by_name:
+            return disc_by_name[filename].get("sha1") or None
+        return None
+
+    playable_exts = _playable_extensions()
+    base_title = (release.get("title") or title).strip()
+
+    try:
+        hoard_hits = (search_fn(base_title, redump_id,
+                                collection=HOARD_COLLECTION) or [])
+    except TypeError:
+        hoard_hits = []
+    hoard_pick = None
+    for hit in sorted(hoard_hits, key=_is_mega_set)[:6]:
+        ident = hit.get("identifier")
+        if not ident:
+            continue
+        try:
+            files = list_fn(ident) or []
+        except Exception:
+            continue
+        for entry in files:
+            if entry.get("name") == f"{title}.zip":
+                hoard_pick = {
+                    "identifier": ident,
+                    "filename": entry.get("name"),
+                    "size": _size_of(entry),
+                    "sha1": entry.get("sha1") or None,
+                    "source": "hoard",
+                    "files": files,
+                }
+                break
+        if hoard_pick:
+            break
+        playables = [f for f in files
+                     if _is_playable(f.get("name", ""), playable_exts)]
+        named = [p for p in playables if p.get("name") in disc_by_name]
+        if len(named) == 1:
+            name = named[0].get("name")
+            hoard_pick = {
+                "identifier": ident,
+                "filename": name,
+                "size": _size_of(named[0]),
+                "sha1": sha1_for(name),
+                "source": "hoard",
+                "files": files,
+            }
+            break
+
     hits = search_fn(f'"{title}"', redump_id) or []
     if not hits:
         for hit in search_fn(title, redump_id) or []:
@@ -64,12 +131,22 @@ def resolve_from_redump(release: dict, redump_id: str,
                     == title.casefold()):
                 hits.append(hit)
     if not hits:
+        if hoard_pick:
+            return blank(status="ok", identifier=hoard_pick["identifier"],
+                         filename=hoard_pick["filename"],
+                         files=hoard_pick["files"],
+                         sha1=hoard_pick["sha1"], alternates=[])
         return blank(status="empty")
     if len(hits) > 1:
         exact = [h for h in hits
                  if (h.get("title") or "").strip().casefold()
                  == title.casefold()]
         if len(exact) != 1:
+            if hoard_pick:
+                return blank(status="ok", identifier=hoard_pick["identifier"],
+                             filename=hoard_pick["filename"],
+                             files=hoard_pick["files"],
+                             sha1=hoard_pick["sha1"], alternates=[])
             return blank(status="ambiguous", candidates=hits)
         hits = exact
 
@@ -80,24 +157,39 @@ def resolve_from_redump(release: dict, redump_id: str,
     if not playable:
         return blank(status="empty", identifier=identifier, files=files)
 
-    disc_by_name = {d.get("name"): d for d in release.get("discs", [])
-                    if d.get("name")}
-
-    def sha1_for(filename: str | None) -> str | None:
-        if filename and filename in disc_by_name:
-            return disc_by_name[filename].get("sha1") or None
-        return None
-
     if sizes:
         sized = [f for f in playable if _size_of(f) in sizes]
         if len(sized) == 1:
             name = sized[0].get("name")
+            if hoard_pick:
+                return blank(
+                    status="ok", identifier=hoard_pick["identifier"],
+                    filename=hoard_pick["filename"],
+                    files=hoard_pick["files"], sha1=hoard_pick["sha1"],
+                    alternates=[{"identifier": identifier, "filename": name,
+                                 "size": _size_of(sized[0]),
+                                 "sha1": sha1_for(name),
+                                 "source": "mirror"}])
             return blank(status="ok", identifier=identifier, filename=name,
                          files=files, sha1=sha1_for(name))
     if len(playable) == 1:
         name = playable[0].get("name")
+        if hoard_pick:
+            return blank(
+                status="ok", identifier=hoard_pick["identifier"],
+                filename=hoard_pick["filename"],
+                files=hoard_pick["files"], sha1=hoard_pick["sha1"],
+                alternates=[{"identifier": identifier, "filename": name,
+                             "size": _size_of(playable[0]),
+                             "sha1": sha1_for(name),
+                             "source": "mirror"}])
         return blank(status="ok", identifier=identifier, filename=name,
                      files=files, sha1=sha1_for(name))
+    if hoard_pick:
+        return blank(status="ok", identifier=hoard_pick["identifier"],
+                     filename=hoard_pick["filename"],
+                     files=hoard_pick["files"], sha1=hoard_pick["sha1"],
+                     alternates=[])
     return blank(status="need_file_choice", identifier=identifier,
                  files=files)
 

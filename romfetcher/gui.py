@@ -62,6 +62,7 @@ class MainWindow(QMainWindow):
         self._identifier: str | None = None
         self._title = ""
         self._sha1_override: str | None = None
+        self._alternates: list = []
         self._row_mode = "catalog"
         self._pad = None
         self._worker: DownloadWorker | None = None
@@ -489,15 +490,17 @@ class MainWindow(QMainWindow):
         self._show_detail(hit.get("name", ""), result.get("identifier"),
                           result.get("files", []) or [],
                           result.get("status", ""), result.get("sha1"),
-                          autostart=(result.get("status") == "ok"))
+                          autostart=(result.get("status") == "ok"),
+                          alternates=result.get("alternates"))
 
     def _show_detail(self, title: str, identifier: str | None,
                      files: list, status: str, sha1: str | None,
-                     autostart: bool) -> None:
+                     autostart: bool, alternates: list | None = None) -> None:
         self._title = title
         self._identifier = identifier
         self._files = files
         self._sha1_override = sha1
+        self._alternates = alternates or []
         self.detail_title.setText(title)
         if status == "need_file_choice":
             self.file_combo.clear()
@@ -573,7 +576,7 @@ class MainWindow(QMainWindow):
         self._worker = DownloadWorker(
             self._identifier, filename, self._title,
             getattr(self, "_redump_id", "PS2"), self._emudeck_dir,
-            sha1=sha1)
+            sha1=sha1, alternates=self._alternates)
         self._worker.progress.connect(self._on_progress)
         self._worker.log_line.connect(self.status.setText)
         self._worker.finished.connect(self._on_finished)

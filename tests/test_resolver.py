@@ -6,19 +6,19 @@ def test_resolver_empty_ambiguous_and_allowlist_hit():
                                    "filename": "game.chd"}}
     assert resolver.resolve(
         "No Such Game XYZ", "PS2",
-        lambda q, s: [], lambda i: [], allow)["status"] == "empty"
+        lambda q, s, **k: [], lambda i: [], allow)["status"] == "empty"
     assert resolver.resolve(
         "Sample", "PS2",
-        lambda q, s: [{"identifier": "a"}, {"identifier": "b"}],
+        lambda q, s, **k: [{"identifier": "a"}, {"identifier": "b"}],
         lambda i: [], allow)["status"] == "ambiguous"
     ok = resolver.resolve(
         "Sample Game (USA)", "PS2",
-        lambda q, s: [{"identifier": "x"}],
+        lambda q, s, **k: [{"identifier": "x"}],
         lambda i: [{"name": "game.chd"}], allow)
     assert ok["status"] == "ok" and ok["filename"] == "game.chd"
     multi = resolver.resolve(
         "Other Game", "PS2",
-        lambda q, s: [{"identifier": "oid"}],
+        lambda q, s, **k: [{"identifier": "oid"}],
         lambda i: [{"name": "game.iso", "size": "10"},
                    {"name": "game.chd", "size": "8"},
                    {"name": "game.7z", "size": "6"}], {})
@@ -29,7 +29,7 @@ def test_resolver_empty_ambiguous_and_allowlist_hit():
 def test_resolver_malformed_allowlist_entry_is_safe():
     bad = {"Weird": {"identifier": ""}}
     out = resolver.resolve(
-        "Weird", "PS2", lambda q, s: [{"identifier": "x"}],
+        "Weird", "PS2", lambda q, s, **k: [{"identifier": "x"}],
         lambda i: [{"name": "game.iso"}], bad)
     assert out["status"] in ("ambiguous", "ok", "need_file_choice")
 
@@ -54,7 +54,7 @@ def test_resolve_from_redump_size_autopick():
              "discs": [{"name": "game.chd", "size": 8, "sha1": "abc"}]}
     out = resolver.resolve_from_redump(
         entry, "PS2",
-        lambda q, s: [{"identifier": "abc", "title": "Some Game (USA)"}],
+        lambda q, s, **k: [{"identifier": "abc", "title": "Some Game (USA)"}],
         lambda i: [{"name": "game.iso", "size": "10"},
                    {"name": "game.chd", "size": "8"}],
         {})
@@ -83,13 +83,13 @@ def test_resolve_from_redump_ambiguous_and_empty():
     entry = {"name": "Some Game (USA)", "discs": []}
     amb = resolver.resolve_from_redump(
         entry, "PS2",
-        lambda q, s: [{"identifier": "a", "title": "Other"},
+        lambda q, s, **k: [{"identifier": "a", "title": "Other"},
                       {"identifier": "b", "title": "Else"}],
         lambda i: [], {})
     assert amb["status"] == "ambiguous"
     assert len(amb["candidates"]) == 2
     empty = resolver.resolve_from_redump(
-        entry, "PS2", lambda q, s: [], lambda i: [], {})
+        entry, "PS2", lambda q, s, **k: [], lambda i: [], {})
     assert empty["status"] == "empty"
 
 
@@ -97,3 +97,85 @@ def test_resolve_identifier_unknown_id_lists_files():
     out = resolver.resolve_identifier(
         "xyz", lambda i: [{"name": "g.iso"}, {"name": "g.chd"}], {})
     assert out["status"] == "need_file_choice"
+
+
+def _hoard_entry():
+    return {"name": "Gauntlet - Dark Legacy (USA)",
+            "title": "Gauntlet - Dark Legacy", "region": "USA",
+            "version": "",
+            "discs": [{"name": "Gauntlet - Dark Legacy (USA).iso",
+                       "size": 624355972, "sha1": "abc123"}]}
+
+
+def test_hoard_match_wins_with_mirror_alternate():
+    calls = []
+
+    def fake_search(query, system, collection=None):
+        calls.append((query, collection))
+        if collection == "redump":
+            return [{"identifier": "sony_playstation2_g",
+                      "title": "Sony PlayStation 2 - G - Redump.info"}]
+        return [{"identifier": "xyz",
+                 "title": "Gauntlet - Dark Legacy (USA)"}]
+
+    def fake_list(ident):
+        if ident == "sony_playstation2_g":
+            return [{"name": "Gauntlet - Dark Legacy (USA).zip",
+                      "size": "624355972", "sha1": "ziphash"}]
+        assert ident == "xyz"
+        return [{"name": "Gauntlet - Dark Legacy (USA).iso",
+                  "size": "624355972"}]
+
+    out = resolver.resolve_from_redump(_hoard_entry(), "PS2", fake_search,
+                                       fake_list, {})
+    assert out["status"] == "ok"
+    assert out["identifier"] == "sony_playstation2_g"
+    assert out["filename"] == "Gauntlet - Dark Legacy (USA).zip"
+    assert out["sha1"] == "ziphash"
+    assert out["alternates"] == [{
+        "identifier": "xyz",
+        "filename": "Gauntlet - Dark Legacy (USA).iso",
+        "size": 624355972, "sha1": "abc123", "source": "mirror"}]
+    assert ("Gauntlet - Dark Legacy", "redump") in [
+        (q, c) for q, c in calls]
+def test_hoard_disc_name_match_uses_catalog_sha1():
+    def fake_search(query, system, collection=None):
+        return [{"identifier": "single-game-item",
+                 "title": "Gauntlet - Dark Legacy (USA)"}]
+
+    def fake_list(ident):
+        return [{"name": "Gaunt.jpeg"},
+                {"name": "Gauntlet - Dark Legacy (USA).iso", "size": "1"}]
+
+    out = resolver.resolve_from_redump(_hoard_entry(), "PS2", fake_search,
+                                       fake_list, {})
+    assert out["status"] == "ok"
+    assert out["filename"] == "Gauntlet - Dark Legacy (USA).iso"
+    assert out["sha1"] == "abc123"
+
+
+def test_hoard_miss_falls_back_to_global():
+    calls = []
+
+    def fake_search(query, system, collection=None):
+        calls.append(collection)
+        if collection == "redump":
+            return []
+        return [{"identifier": "xyz", "title": "Gauntlet - Dark Legacy (USA)"}]
+
+    def fake_list(ident):
+        return [{"name": "Gauntlet - Dark Legacy (USA).iso", "size": "5"}]
+
+    out = resolver.resolve_from_redump(_hoard_entry(), "PS2", fake_search,
+                                       fake_list, {})
+    assert out["status"] == "ok"
+    assert out["identifier"] == "xyz"
+    assert "redump" in calls and None in calls
+
+
+def test_mega_sets_sort_last():
+    assert resolver._is_mega_set(
+        {"identifier": "ps2set", "title": "Sony PS2 Redump ISO Set Part 3"})
+    assert not resolver._is_mega_set(
+        {"identifier": "sony_playstation2_g",
+         "title": "Sony PlayStation 2 - G - Redump.info"})

@@ -21,6 +21,10 @@ class IncompleteError(OSError):
     """Finished bytes don't match the advertised file. Kept for resume."""
 
 
+class AuthRequiredError(IncompleteError):
+    """Server demands a login (HTTP 401/403). Try another source."""
+
+
 class _RangeRejected(Exception):
     pass
 
@@ -99,6 +103,10 @@ def _fetch_once(url, dest, expected_size, progress_cb, http_stream,
         status = result.get("status", 200)
         if status == 416:
             raise _RangeRejected()
+        if status in (401, 403):
+            raise AuthRequiredError(
+                "This file needs an Archive.org login — "
+                "try another source.")
         content_type = (result.get("headers") or {}).get("content-type", "")
         if _is_error_page(content_type):
             raise IncompleteError(
@@ -132,6 +140,10 @@ def _fetch_once(url, dest, expected_size, progress_cb, http_stream,
     with result as r:
         if getattr(r, "status_code", 200) == 416:
             raise _RangeRejected()
+        if getattr(r, "status_code", 200) in (401, 403):
+            raise AuthRequiredError(
+                "This file needs an Archive.org login — "
+                "try another source.")
         if (getattr(r, "status_code", 200) == 200 and existing
                 and not overwrite):
             existing = 0

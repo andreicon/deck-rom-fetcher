@@ -9,14 +9,18 @@ def _prod_get(url, params=None):
     return httpx.get(url, params=params, timeout=30).json()
 
 
-def search_titles(query: str, system: str, http_get=None) -> list:
-    """Search Archive.org. `system` is caller-side only (no server filter)."""
+def search_titles(query: str, system: str, http_get=None,
+                  collection: str | None = None) -> list:
+    """Search Archive.org. `system` is caller-side only (no server filter).
+
+    Pass collection="redump" to scope to the Unofficial Redump Hoard.
+    """
     http_get = http_get or _prod_get
-    url = (
-        "https://archive.org/advancedsearch.php"
-        f"?q={quote_plus(query)}+AND+mediatype:software"
-        "&fl[]=identifier,title&rows=20&page=1&output=json"
-    )
+    q = f"{quote_plus(query)}+AND+mediatype:software"
+    if collection:
+        q += f"+AND+collection:{quote_plus(collection)}"
+    url = ("https://archive.org/advancedsearch.php"
+           f"?q={q}&fl[]=identifier,title&rows=20&page=1&output=json")
     data = http_get(url) or {}
     docs = (data.get("response") or {}).get("docs") or []
     return [
