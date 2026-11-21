@@ -4,7 +4,6 @@ from collections.abc import Callable
 import os
 
 import yaml
-
 _DEFAULT_PLAYABLE = (".iso", ".bin", ".cue", ".chd", ".cso")
 _DEFAULT_OUTER = (".zip", ".7z")
 
@@ -27,6 +26,37 @@ def _playable_extensions() -> tuple:
 
 def _is_playable(name: str, playable: tuple) -> bool:
     return name.lower().endswith(playable)
+
+
+def resolve_identifier(identifier: str, list_fn: Callable,
+                     allowlist: dict | None) -> dict:
+    """Resolve a known Archive.org identifier straight to a file.
+
+    Skips the fuzzy title search entirely, so region/revision ambiguity
+    cannot happen. Same status vocabulary as resolve().
+    """
+    allowlist = allowlist or {}
+
+    def blank(**kw):
+        base = {"status": "", "identifier": identifier, "filename": None,
+                "candidates": [], "files": []}
+        base.update(kw)
+        return base
+
+    files = list_fn(identifier) or []
+    playable = _playable_extensions()
+    playables = [f for f in files if _is_playable(f.get("name", ""), playable)]
+    sha1 = None
+    for entry in allowlist.values():
+        if isinstance(entry, dict) and entry.get("identifier") == identifier:
+            sha1 = entry.get("sha1")
+            break
+    if not playables:
+        return blank(status="empty", files=files)
+    if len(playables) == 1:
+        return blank(status="ok", filename=playables[0].get("name"),
+                     files=files, sha1=sha1)
+    return blank(status="need_file_choice", files=files, sha1=sha1)
 
 
 def resolve(title_query: str, redump_id: str,

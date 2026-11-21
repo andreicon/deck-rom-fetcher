@@ -2,6 +2,7 @@
 
 import json
 import os
+from functools import partial
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -59,6 +60,7 @@ class MainWindow(QMainWindow):
         self._files: list = []
         self._identifier: str | None = None
         self._title = ""
+        self._sha1_override: str | None = None
         self._worker: DownloadWorker | None = None
         self._build_ui()
         self._load_systems()
@@ -80,14 +82,28 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self._search_page())
         self.stack.addWidget(self._detail_page())
 
+    def _nav_row(self, *buttons: QPushButton) -> QHBoxLayout:
+        nav = QHBoxLayout()
+        for button in buttons:
+            nav.addWidget(button)
+        exit_btn = QPushButton("Exit")
+        exit_btn.clicked.connect(QApplication.quit)
+        nav.addWidget(exit_btn)
+        return nav
+
     def _systems_page(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.addWidget(QLabel("GetROM — pick a system"))
         self.systems_list = QListWidget()
         self.systems_list.itemActivated.connect(self._on_system_chosen)
+        self.systems_list.itemClicked.connect(self._on_system_chosen)
         layout.addWidget(self.systems_list, 1)
         layout.addWidget(self._hint_label(OWNERSHIP_LINE))
+        open_btn = QPushButton("Open →")
+        open_btn.setMinimumHeight(90)
+        open_btn.clicked.connect(self._on_system_open_current)
+        layout.addLayout(self._nav_row(open_btn))
         return page
 
     def _search_page(self) -> QWidget:
@@ -108,10 +124,11 @@ class MainWindow(QMainWindow):
             "Steam+X opens the keyboard. D-pad moves, A selects, B goes back."))
         self.results_list = QListWidget()
         self.results_list.itemActivated.connect(self._on_result_chosen)
+        self.results_list.itemClicked.connect(self._on_result_chosen)
         layout.addWidget(self.results_list, 1)
         back = QPushButton("Back")
         back.clicked.connect(self._go_systems)
-        layout.addWidget(back)
+        layout.addLayout(self._nav_row(back))
         return page
 
     def _detail_page(self) -> QWidget:
@@ -143,6 +160,9 @@ class MainWindow(QMainWindow):
         back.clicked.connect(self._go_search)
         nav.addWidget(self.cancel_btn)
         nav.addWidget(back)
+        exit_btn = QPushButton("Exit")
+        exit_btn.clicked.connect(QApplication.quit)
+        nav.addWidget(exit_btn)
         layout.addLayout(nav)
         return page
 
@@ -190,6 +210,11 @@ class MainWindow(QMainWindow):
             self.systems_list.setCurrentRow(0)
             self.systems_list.setFocus()
 
+    def _on_system_open_current(self) -> None:
+        item = self.systems_list.currentItem()
+        if item is not None:
+            self._on_system_chosen(item)
+
     def _on_system_chosen(self, item: QListWidgetItem) -> None:
         redump_id = item.text().split("  ")[0]
         self._redump_id = redump_id
@@ -222,9 +247,21 @@ class MainWindow(QMainWindow):
             QListWidgetItem(f'No results for "{query}".', self.results_list)
             return
         for hit in self._hits:
-            QListWidgetItem(f"{hit.get('title', '')}\n"
-                            f"{hit.get('identifier', '')}",
-                            self.results_list)
+            item = QListWidgetItem(self.results_list)
+            row = QWidget()
+            layout = QHBoxLayout(row)
+            layout.setContentsMargins(12, 8, 12, 8)
+            label = QLabel(
+                f"{hit.get('title', '')}\n{hit.get('identifier', '')}")
+            label.setWordWrap(True)
+            install = QPushButton("Install")
+            install.setMinimumHeight(90)
+            install.setMinimumWidth(220)
+            install.clicked.connect(partial(self._on_install_hit, hit))
+            layout.addWidget(label, 1)
+            layout.addWidget(install)
+            item.setSizeHint(row.sizeHint())
+            self.results_list.setItemWidget(item, row)
         self.results_list.setCurrentRow(0)
         self.results_list.setFocus()
 
@@ -234,6 +271,54 @@ class MainWindow(QMainWindow):
             return  # the "no results" placeholder row
         hit = self._hits[row]
         self._resolve_title(hit.get("title", ""))
+
+    def _on_install_hit(self, hit: dict) -> None:
+        """Install button on a search row: download this item right away."""
+        identifier = hit.get("identifier", "")
+        title = hit.get("title", "")
+        try:
+            result = resolver.resolve_identifier(
+                identifier, archive.list_files, self._allowlist)
+        except Exception as exc:
+            QMessageBox.warning(self, "Could not resolve",
+                                f"{exc} — check your network and try again.")
+            return
+        if result.get("status") == "empty":
+            names = ", ".join(
+                f.get("name", "?") for f in result.get("files", [])[:5])
+            QMessageBox.information(
+                self, "Nothing playable",
+                f'"{title}" has no playable file. Files: {names}')
+            return
+        self._show_detail(title, identifier, result.get("files", []),
+                          result.get("status", ""),
+                          result.get("sha1"),
+                          autostart=(result.get("status") == "ok"))
+
+    def _show_detail(self, title: str, identifier: str | None,
+                     files: list, status: str, sha1: str | None,
+                     autostart: bool) -> None:
+        self._title = title
+        self._identifier = identifier
+        self._files = files
+        self._sha1_override = sha1
+        self.detail_title.setText(title)
+        if status == "need_file_choice":
+            self.file_combo.clear()
+            for entry in files:
+                self.file_combo.addItem(
+                    f"{entry.get('name', '')}  ({entry.get('size', '?')} bytes)")
+            self.file_combo.setVisible(True)
+        else:
+            self.file_combo.setVisible(False)
+        self.progress.setVisible(False)
+        self.cancel_btn.setVisible(False)
+        self.get_btn.setEnabled(True)
+        self.status.setText("Ready. Tap GET to download.")
+        self.stack.setCurrentIndex(2)
+        self.get_btn.setFocus()
+        if autostart and status == "ok":
+            self._on_get()
 
     def _resolve_title(self, title: str) -> None:
         self._title = title
@@ -259,22 +344,9 @@ class MainWindow(QMainWindow):
                 f'"{title}" matches several items — pick the exact one:\n'
                 f"{lines}")
             return
-        self._identifier = result.get("identifier")
-        self._files = result.get("files", []) or []
-        self.detail_title.setText(title)
-        if status == "need_file_choice":
-            self.file_combo.clear()
-            for entry in self._files:
-                self.file_combo.addItem(
-                    f"{entry.get('name', '')}  ({entry.get('size', '?')} bytes)")
-            self.file_combo.setVisible(True)
-        else:
-            self.file_combo.setVisible(False)
-        self.progress.setVisible(False)
-        self.cancel_btn.setVisible(False)
-        self.status.setText("Ready. Tap GET to download.")
-        self.stack.setCurrentIndex(2)
-        self.get_btn.setFocus()
+        self._show_detail(title, result.get("identifier"),
+                          result.get("files", []) or [], status or "",
+                          None, autostart=False)
 
     # -- download -----------------------------------------------------------
     def _on_get(self) -> None:
@@ -290,10 +362,11 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Nothing to fetch",
                                 "This item has no downloadable file.")
             return
-        sha1 = None
-        entry = self._allowlist.get(self._title)
-        if isinstance(entry, dict):
-            sha1 = entry.get("sha1")
+        sha1 = self._sha1_override
+        if sha1 is None:
+            entry = self._allowlist.get(self._title)
+            if isinstance(entry, dict):
+                sha1 = entry.get("sha1")
         self.get_btn.setEnabled(False)
         self.progress.setVisible(True)
         self.progress.setRange(0, 0)  # busy until first progress signal

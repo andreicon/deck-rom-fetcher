@@ -32,3 +32,24 @@ def test_resolver_malformed_allowlist_entry_is_safe():
         "Weird", "PS2", lambda q, s: [{"identifier": "x"}],
         lambda i: [{"name": "game.iso"}], bad)
     assert out["status"] in ("ambiguous", "ok", "need_file_choice")
+
+
+def test_resolve_identifier_single_multi_and_empty():
+    allow = {"Game (USA)": {"identifier": "abc", "filename": "g.chd",
+                            "sha1": "deadbeef"}}
+    one = resolver.resolve_identifier(
+        "abc", lambda i: [{"name": "g.chd"}], allow)
+    assert one["status"] == "ok" and one["filename"] == "g.chd"
+    assert one["sha1"] == "deadbeef"
+    many = resolver.resolve_identifier(
+        "abc", lambda i: [{"name": "g.iso"}, {"name": "g.chd"}], allow)
+    assert many["status"] == "need_file_choice"
+    assert len(many["files"]) == 2
+    none = resolver.resolve_identifier("abc", lambda i: [], allow)
+    assert none["status"] == "empty"
+
+
+def test_resolve_identifier_unknown_id_lists_files():
+    out = resolver.resolve_identifier(
+        "xyz", lambda i: [{"name": "g.iso"}, {"name": "g.chd"}], {})
+    assert out["status"] == "need_file_choice"
